@@ -1,0 +1,245 @@
+name: CI
+
+on: workflow_dispatch
+
+env:
+  FRIDA_COMPILER_MOD: subprojects/frida-core/src/compiler/go.mod
+  ANDROID_NDK_VERSION: r25b
+
+jobs:
+  package-android:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: frida-android
+    strategy:
+      matrix:
+        arch: [x86, x86_64, arm, arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+      - name: Package Gum devkit
+        uses: ./.github/actions/package-artifact-files-as-tarball
+        with:
+          name: frida-gum-devkit-android-${{ matrix.arch }}
+      - name: Package GumJS devkit
+        uses: ./.github/actions/package-artifact-files-as-tarball
+        with:
+          name: frida-gumjs-devkit-android-${{ matrix.arch }}
+      - name: Package Core devkit
+        uses: ./.github/actions/package-artifact-files-as-tarball
+        with:
+          name: frida-core-devkit-android-${{ matrix.arch }}
+      - name: Package frida-server
+        uses: ./.github/actions/package-artifact-file
+        with:
+          name: frida-server-android-${{ matrix.arch }}
+      - name: Package frida-portal
+        uses: ./.github/actions/package-artifact-file
+        with:
+          name: frida-portal-android-${{ matrix.arch }}
+      - name: Package frida-gadget
+        uses: ./.github/actions/package-artifact-file
+        with:
+          name: frida-gadget-android-${{ matrix.arch }}
+      - name: Package frida-inject
+        uses: ./.github/actions/package-artifact-file
+        with:
+          name: frida-inject-android-${{ matrix.arch }}
+
+ 
+  frida-android:
+    needs: [sdk-linux, sdk-android-32, sdk-android-64]
+    strategy:
+      matrix:
+        arch: [x86, x86_64, arm, arm64]
+      fail-fast: false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up environment
+        uses: ./.github/actions/setup-linux-env
+        with:
+          aws-access-key-id: ${{ secrets.S3_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.S3_SECRET_KEY }}
+          cloudflare-email: ${{ secrets.CF_EMAIL }}
+          cloudflare-token: ${{ secrets.CF_TOKEN }}
+      - name: Grab frida-core
+        run: python tools/ensure-submodules.py frida-core
+      - name: Install Go toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ env.FRIDA_COMPILER_MOD }}
+          cache-dependency-path: ${{ env.FRIDA_COMPILER_MOD }}
+      - name: Set up NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ env.ANDROID_NDK_VERSION }}
+          add-to-path: false
+      - name: Add ANDROID_NDK_ROOT to environment
+        run: echo "ANDROID_NDK_ROOT=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+      - name: Configure
+        run: >-
+          ./configure
+          "--prefix=$FRIDA_PREFIX"
+          --host=android-${{ matrix.arch }}
+          --enable-portal
+          --
+          -Dfrida-gum:devkits=gum,gumjs
+          -Dfrida-core:compiler_backend=enabled
+          -Dfrida-core:devkits=core
+      - name: Compile
+        run: make
+      - name: Install
+        run: make install
+      - name: Upload Gum devkit
+        uses: actions/upload-artifact@v4
+        with:
+          name: frida-gum-devkit-android-${{ matrix.arch }}
+          path: ${{ env.FRIDA_PREFIX }}/lib/frida/devkits/gum/
+      - name: Upload GumJS devkit
+        uses: actions/upload-artifact@v4
+        with:
+          name: frida-gumjs-devkit-android-${{ matrix.arch }}
+          path: ${{ env.FRIDA_PREFIX }}/lib/frida/devkits/gumjs/
+      - name: Upload Core devkit
+        uses: actions/upload-artifact@v4
+        with:
+          name: frida-core-devkit-android-${{ matrix.arch }}
+          path: ${{ env.FRIDA_PREFIX }}/lib/frida/devkits/core/
+      - name: Upload frida-server
+        uses: actions/upload-artifact@v4
+        with:
+          name: frida-server-android-${{ matrix.arch }}
+          path: ${{ env.FRIDA_PREFIX }}/bin/frida-server
+      - name: Upload frida-portal
+        uses: actions/upload-artifact@v4
+        with:
+          name: frida-portal-android-${{ matrix.arch }}
+          path: ${{ env.FRIDA_PREFIX }}/bin/frida-portal
+      - name: Upload frida-inject
+        uses: actions/upload-artifact@v4
+        with:
+          name: frida-inject-android-${{ matrix.arch }}
+          path: ${{ env.FRIDA_PREFIX }}/bin/frida-inject
+      - name: Upload 32-bit frida-gadget
+        if: ${{ !contains(matrix.arch, '64') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: frida-gadget-android-${{ matrix.arch }}
+          path: ${{ env.FRIDA_PREFIX }}/lib/frida/32/frida-gadget.so
+      - name: Upload 64-bit frida-gadget
+        if: ${{ contains(matrix.arch, '64') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: frida-gadget-android-${{ matrix.arch }}
+          path: ${{ env.FRIDA_PREFIX }}/lib/frida/64/frida-gadget.so
+          
+  toolchain-linux:
+    strategy:
+      matrix:
+        arch: [x86, x86_64, x86_64-musl, armhf, armhf-musl, armbe8, arm64, arm64be, arm64beilp32, arm64-musl]
+      fail-fast: false
+    runs-on: ubuntu-latest
+    container: ghcr.io/frida/x-tools-linux-${{ matrix.arch }}:latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+      - name: Set up environment
+        uses: ./.github/actions/setup-linux-env
+        with:
+          aws-access-key-id: ${{ secrets.S3_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.S3_SECRET_KEY }}
+          cloudflare-email: ${{ secrets.CF_EMAIL }}
+          cloudflare-token: ${{ secrets.CF_TOKEN }}
+      - name: Roll toolchain
+        run: releng/deps.py roll toolchain $XTOOLS_HOST
+        
+  sdk-linux:
+    needs: toolchain-linux
+    strategy:
+      matrix:
+        arch: [x86, x86_64, x86_64-musl, armhf, armhf-musl, armbe8, arm64, arm64be, arm64beilp32, arm64-musl, mips, mipsel, mips64, mips64el]
+      fail-fast: false
+    runs-on: ubuntu-latest
+    container: ghcr.io/frida/x-tools-linux-${{ matrix.arch }}:latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+      - name: Set up environment
+        uses: ./.github/actions/setup-linux-env
+        with:
+          aws-access-key-id: ${{ secrets.S3_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.S3_SECRET_KEY }}
+          cloudflare-email: ${{ secrets.CF_EMAIL }}
+          cloudflare-token: ${{ secrets.CF_TOKEN }}
+      - name: Set FRIDA_CAN_RUN_HOST_BINARIES
+        if: ${{ matrix.arch == 'x86' }}
+        run: echo "FRIDA_CAN_RUN_HOST_BINARIES=yes" >> $GITHUB_ENV
+      - name: Configure qemu-user
+        if: ${{ !startsWith(matrix.arch, 'x86') }}
+        run: echo "FRIDA_QEMU_SYSROOT=/opt/x-tools/$XTOOLS_HOST/$XTOOLS_HOST/sysroot" >> $GITHUB_ENV
+      - name: Roll SDK
+        run: releng/deps.py roll sdk $XTOOLS_HOST --activate
+
+        
+  sdk-android-32:
+    needs: toolchain-linux
+    strategy:
+      matrix:
+        arch: [x86, arm]
+      fail-fast: false
+    runs-on: ubuntu-latest
+    container: ghcr.io/frida/x-tools-linux-x86:latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+      - name: Set up environment
+        uses: ./.github/actions/setup-linux-env
+        with:
+          aws-access-key-id: ${{ secrets.S3_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.S3_SECRET_KEY }}
+          cloudflare-email: ${{ secrets.CF_EMAIL }}
+          cloudflare-token: ${{ secrets.CF_TOKEN }}
+      - name: Set up NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ env.ANDROID_NDK_VERSION }}
+          add-to-path: false
+      - name: Roll SDK
+        run: releng/deps.py roll sdk android-${{ matrix.arch }} --build=$XTOOLS_HOST --activate
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+
+  sdk-android-64:
+    needs: toolchain-linux
+    strategy:
+      matrix:
+        arch: [x86_64, arm64]
+      fail-fast: false
+    runs-on: ubuntu-latest
+    container: ghcr.io/frida/x-tools-linux-x86_64:latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+      - name: Set up environment
+        uses: ./.github/actions/setup-linux-env
+        with:
+          aws-access-key-id: ${{ secrets.S3_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.S3_SECRET_KEY }}
+          cloudflare-email: ${{ secrets.CF_EMAIL }}
+          cloudflare-token: ${{ secrets.CF_TOKEN }}
+      - name: Set up NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ env.ANDROID_NDK_VERSION }}
+          add-to-path: false
+      - name: Roll SDK
+        run: releng/deps.py roll sdk android-${{ matrix.arch }} --build=$XTOOLS_HOST --activate
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
