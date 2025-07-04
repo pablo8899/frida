@@ -1,4 +1,4 @@
-name: CI
+name: Frida-Android
 
 on: workflow_dispatch
 
